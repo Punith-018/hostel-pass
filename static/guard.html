@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>Hostel Pass — Gate Board</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Header per Doc 04 Section 4 -->
+  <header class="app-header">
+    <a href="guard.html" class="brand-title">Hostel Pass — Gate</a>
+    <div class="user-nav">
+      <div id="notif-bell-container" class="notif-wrapper">
+        <button id="notif-bell-btn" class="bell-btn" title="Notifications" aria-label="Notifications">
+          🔔
+          <span id="notif-count-badge" class="badge-count" style="display: none;">0</span>
+        </button>
+        <div id="notif-dropdown" class="notif-dropdown" style="display: none;">
+          <div style="padding: 10px 12px; font-weight: 700; border-bottom: 1px solid var(--border);">Notifications</div>
+          <div id="notif-list"></div>
+        </div>
+      </div>
+      <span id="user-info" class="user-pill"></span>
+      <button class="logout-btn" onclick="logout()">Logout</button>
+    </div>
+  </header>
+
+  <main class="container" style="max-width: 600px;">
+    <!-- Top Bar with Updated timestamp per Doc 04 Section 5.4 -->
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px; margin-bottom: 10px;">
+      <h1 style="font-size: 1.15rem; font-weight: 700;">Live Gate Board</h1>
+      <span id="board-timestamp" style="font-size: 0.85rem; color: var(--text-muted); font-weight: 500;">Connecting...</span>
+    </div>
+
+    <!-- Offline banner per Doc 04 Section 5.4: If a refresh fails, keep the last list and show 'Offline — showing data from <time>' -->
+    <div id="offline-banner" class="offline-banner"></div>
+
+    <!-- Search box at top that filters both lists by name or room (client-side) per Doc 04 Section 5.4 -->
+    <input
+      type="text"
+      id="board-search"
+      class="search-input"
+      placeholder="🔍 Search guest, resident, or room..."
+      oninput="applyFilter()"
+    />
+
+    <!-- Guests Today Section per Doc 04 Section 5.4 -->
+    <section style="margin-bottom: 20px;">
+      <h2 style="font-size: 1rem; font-weight: 700; margin-bottom: 10px; color: var(--text-main);">
+        Guests Today
+      </h2>
+      <div id="guests-container">
+        <p style="color: var(--text-muted); font-size: 0.9rem;">Loading guests...</p>
+      </div>
+    </section>
+
+    <!-- Declared Out Section per Doc 04 Section 5.4 -->
+    <section>
+      <div style="margin-bottom: 8px;">
+        <h2 style="font-size: 1rem; font-weight: 700; margin-bottom: 2px; color: var(--text-main);">
+          Declared Out Tonight
+        </h2>
+        <!-- Section subtitle per Doc 04 Section 5.4 -->
+        <p style="font-size: 0.8rem; color: var(--text-muted);">
+          Declared by residents, not verified at the gate.
+        </p>
+      </div>
+      <div id="out-container">
+        <p style="color: var(--text-muted); font-size: 0.9rem;">Loading declared out...</p>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+  <script>
+    // 1. Role verification
+    const currentUser = requireRole("guard");
+    if (currentUser) {
+      document.getElementById("user-info").textContent = `${currentUser.name}`;
+      startNotifications();
+    }
+
+    let rawBoardData = { guests: [], out: [] };
+    let lastSuccessTime = null;
+
+    async function fetchBoard() {
+      const banner = document.getElementById("offline-banner");
+      const timestampEl = document.getElementById("board-timestamp");
+
+      try {
+        const data = await api("GET", "/board");
+        rawBoardData = data;
+        lastSuccessTime = new Date();
+        
+        banner.style.display = "none";
+        banner.textContent = "";
+
+        const timeStr = lastSuccessTime.toLocaleTimeString("en-IN", {
+          timeZone: "Asia/Kolkata",
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true
+        });
+        timestampEl.textContent = `Updated ${timeStr}`; // Doc 04 Section 5.4: "Updated 4:31 pm"
+
+        applyFilter();
+      } catch (err) {
+        // Doc 04 Section 5.4: If a refresh fails, keep the last list and show "Offline — showing data from <time>"
+        if (lastSuccessTime) {
+          const timeStr = lastSuccessTime.toLocaleTimeString("en-IN", {
+            timeZone: "Asia/Kolkata",
+            hour: "numeric",
+            minute: "2-digit",
+            hour12: true
+          });
+          banner.textContent = `Offline — showing data from ${timeStr}`;
+          banner.style.display = "block";
+        } else {
+          timestampEl.textContent = "Offline";
+        }
+      }
+    }
+
+    function applyFilter() {
+      const q = (document.getElementById("board-search").value || "").toLowerCase().trim();
+
+      // Filter guests by guest name, relation, host name, or host room
+      const filteredGuests = (rawBoardData.guests || []).filter((g) => {
+        if (!q) return true;
+        const gName = (g.guest_name || "").toLowerCase();
+        const rel = (g.relation || "").toLowerCase();
+        const hName = (g.host_name || "").toLowerCase();
+        const room = (g.host_room || "").toLowerCase();
+        return gName.includes(q) || rel.includes(q) || hName.includes(q) || room.includes(q);
+      });
+
+      // Filter out by resident name or room
+      const filteredOut = (rawBoardData.out || []).filter((o) => {
+        if (!q) return true;
+        const rName = (o.resident_name || "").toLowerCase();
+        const room = (o.room || "").toLowerCase();
+        return rName.includes(q) || room.includes(q);
+      });
+
+      renderGuests(filteredGuests);
+      renderOut(filteredOut);
+    }
+
+    function renderGuests(guests) {
+      const container = document.getElementById("guests-container");
+      container.innerHTML = "";
+
+      if (!guests || guests.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "card";
+        empty.style.textAlign = "center";
+        empty.style.color = "var(--text-muted)";
+        empty.style.padding = "16px";
+        empty.textContent = "No guests approved today."; // Doc 04 Section 5.4 empty state
+        container.appendChild(empty);
+        return;
+      }
+
+      guests.forEach((g) => {
+        const card = document.createElement("div");
+        card.className = `board-card ${g.is_now ? "allowed-now" : ""}`;
+
+        // Top Row: Guest Name + Relation and Status Label
+        const topRow = document.createElement("div");
+        topRow.style.display = "flex";
+        topRow.style.justifyContent = "space-between";
+        topRow.style.alignItems = "center";
+
+        const nameEl = document.createElement("div");
+        nameEl.className = "board-guest-name";
+        nameEl.textContent = `${g.guest_name} (${g.relation})`;
+
+        const label = document.createElement("span");
+        if (g.is_now) {
+          label.className = "badge badge-approved";
+          label.textContent = "ALLOWED NOW"; // Large prominent green label per Doc 04 Section 5.4
+        } else {
+          label.className = "badge badge-expired";
+          label.textContent = "Later today"; // Grey label per Doc 04 Section 5.4
+        }
+
+        topRow.appendChild(nameEl);
+        topRow.appendChild(label);
+        card.appendChild(topRow);
+
+        // Host Info
+        const hostEl = document.createElement("div");
+        hostEl.className = "board-host-info";
+        hostEl.textContent = `Visiting ${g.host_name} (Room ${g.host_room || "—"})`;
+        card.appendChild(hostEl);
+
+        // Time Range
+        const timeEl = document.createElement("div");
+        timeEl.className = "board-time-info";
+        timeEl.textContent = `Time window: ${fmt(g.start_at)} → ${fmt(g.end_at)}`;
+        card.appendChild(timeEl);
+
+        container.appendChild(card);
+      });
+    }
+
+    function renderOut(outList) {
+      const container = document.getElementById("out-container");
+      container.innerHTML = "";
+
+      if (!outList || outList.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "card";
+        empty.style.textAlign = "center";
+        empty.style.color = "var(--text-muted)";
+        empty.style.padding = "16px";
+        empty.textContent = "No one declared out."; // Doc 04 Section 5.4 empty state
+        container.appendChild(empty);
+        return;
+      }
+
+      outList.forEach((o) => {
+        const card = document.createElement("div");
+        card.className = "board-card";
+
+        const nameEl = document.createElement("div");
+        nameEl.style.fontWeight = "700";
+        nameEl.style.fontSize = "1rem";
+        nameEl.textContent = `${o.resident_name} (Room ${o.room || "—"})`;
+        card.appendChild(nameEl);
+
+        const timeEl = document.createElement("div");
+        timeEl.className = "board-time-info";
+        timeEl.textContent = `Out from: ${fmt(o.start_at)} • Back by: ${fmt(o.end_at)}`;
+        card.appendChild(timeEl);
+
+        container.appendChild(card);
+      });
+    }
+
+    // Refresh every 30s per Doc 04 Section 5.4
+    fetchBoard();
+    setInterval(fetchBoard, 30000);
+  </script>
+</body>
+</html>

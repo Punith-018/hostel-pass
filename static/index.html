@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>Hostel Pass — Login</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container" style="padding-top: 40px;">
+    <div class="card">
+      <div style="text-align: center; margin-bottom: 20px;">
+        <h1 style="color: var(--primary); font-size: 1.5rem; font-weight: 700;">Hostel Pass</h1>
+        <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 4px;">Sign in to manage out-passes and guests</p>
+      </div>
+
+      <form id="login-form">
+        <div class="form-group">
+          <label for="username">Username</label>
+          <input type="text" id="username" name="username" autocomplete="username" required autofocus placeholder="e.g. r101a or warden">
+        </div>
+
+        <div class="form-group">
+          <label for="password">Password</label>
+          <input type="password" id="password" name="password" autocomplete="current-password" required placeholder="••••••••">
+        </div>
+
+        <div id="error-box" class="error-msg"></div>
+
+        <button type="submit" class="btn btn-primary" id="login-btn">Log in</button>
+      </form>
+
+      <!-- Demo logins in small text under the form per Spec 04 Section 5.1 -->
+      <div class="demo-box">
+        <p><strong>Demo Logins (click to fill):</strong></p>
+        <div class="demo-item">
+          <span>Resident (Room 101):</span>
+          <span class="demo-click" onclick="fillDemo('r101a', 'pass123')">r101a / pass123</span>
+        </div>
+        <div class="demo-item">
+          <span>Resident (Room 102):</span>
+          <span class="demo-click" onclick="fillDemo('r102a', 'pass123')">r102a / pass123</span>
+        </div>
+        <div class="demo-item">
+          <span>Warden:</span>
+          <span class="demo-click" onclick="fillDemo('warden', 'warden123')">warden / warden123</span>
+        </div>
+        <div class="demo-item">
+          <span>Guard:</span>
+          <span class="demo-click" onclick="fillDemo('guard', 'guard123')">guard / guard123</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+  <script>
+    function fillDemo(u, p) {
+      document.getElementById("username").value = u;
+      document.getElementById("password").value = p;
+      document.getElementById("error-box").textContent = "";
+    }
+
+    // If already logged in, redirect by role immediately
+    (function checkExistingSession() {
+      const token = localStorage.getItem("token");
+      const userStr = localStorage.getItem("user");
+      if (token && userStr) {
+        try {
+          const user = JSON.parse(userStr);
+          redirectRole(user.role);
+        } catch (e) {
+          localStorage.clear();
+        }
+      }
+    })();
+
+    function redirectRole(role) {
+      if (role === "resident") window.location.href = "resident.html";
+      else if (role === "warden") window.location.href = "warden.html";
+      else if (role === "guard") window.location.href = "guard.html";
+    }
+
+    const loginForm = document.getElementById("login-form");
+    const errorBox = document.getElementById("error-box");
+    const loginBtn = document.getElementById("login-btn");
+
+    loginForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errorBox.textContent = "";
+      loginBtn.disabled = true;
+      loginBtn.textContent = "Logging in...";
+
+      const username = document.getElementById("username").value.trim();
+      const password = document.getElementById("password").value;
+
+      try {
+        const data = await api("POST", "/auth/login", { username, password });
+        localStorage.setItem("token", data.token);
+        localStorage.setItem("user", JSON.stringify(data.user));
+        redirectRole(data.user.role);
+      } catch (err) {
+        loginBtn.disabled = false;
+        loginBtn.textContent = "Log in";
+        // Doc 04 Section 5.1: On 401 show "Invalid username or password"
+        if (err.status === 401) {
+          errorBox.textContent = "Invalid username or password";
+        } else {
+          errorBox.textContent = err.message || "Failed to log in";
+        }
+      }
+    });
+  </script>
+</body>
+</html>

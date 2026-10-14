@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>Hostel Pass — Resident</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Header per Doc 04 Section 4 -->
+  <header class="app-header">
+    <a href="resident.html" class="brand-title">Hostel Pass</a>
+    <div class="user-nav">
+      <div id="notif-bell-container" class="notif-wrapper">
+        <button id="notif-bell-btn" class="bell-btn" title="Notifications" aria-label="Notifications">
+          🔔
+          <span id="notif-count-badge" class="badge-count" style="display: none;">0</span>
+        </button>
+        <div id="notif-dropdown" class="notif-dropdown" style="display: none;">
+          <div style="padding: 10px 12px; font-weight: 700; border-bottom: 1px solid var(--border);">Notifications</div>
+          <div id="notif-list"></div>
+        </div>
+      </div>
+      <span id="user-info" class="user-pill"></span>
+      <button class="logout-btn" onclick="logout()">Logout</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- New Pass Card per Doc 04 Section 5.2 -->
+    <div class="card">
+      <h2 class="card-title">Raise a Pass</h2>
+      
+      <!-- Toggle: Out-pass | Guest pass -->
+      <div class="tab-toggle">
+        <button type="button" class="tab-toggle-btn active" id="tab-out" onclick="setPassType('out')">Out-pass</button>
+        <button type="button" class="tab-toggle-btn" id="tab-guest" onclick="setPassType('guest')">Guest pass</button>
+      </div>
+
+      <form id="pass-form">
+        <!-- Out-Pass Fields -->
+        <div id="out-fields">
+          <div class="form-group">
+            <label for="out-start">Start Time</label>
+            <input type="datetime-local" id="out-start" required>
+          </div>
+          <div class="form-group">
+            <label for="out-end">Return By</label>
+            <input type="datetime-local" id="out-end" required>
+          </div>
+          <div class="form-group">
+            <label for="out-destination">Destination</label>
+            <input type="text" id="out-destination" maxlength="200" placeholder="e.g. City Center / Home">
+          </div>
+          <div class="form-group">
+            <label for="out-reason">Reason</label>
+            <input type="text" id="out-reason" maxlength="200" placeholder="e.g. Study session / Family event">
+          </div>
+        </div>
+
+        <!-- Guest-Pass Fields -->
+        <div id="guest-fields" style="display: none;">
+          <div class="form-group">
+            <label for="guest-date">Visit Date</label>
+            <input type="date" id="guest-date">
+          </div>
+          <div style="display: flex; gap: 10px;">
+            <div class="form-group" style="flex: 1;">
+              <label for="guest-from">From Time</label>
+              <input type="time" id="guest-from">
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label for="guest-until">Until Time</label>
+              <input type="time" id="guest-until">
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="guest-name">Guest Name</label>
+            <input type="text" id="guest-name" maxlength="80" placeholder="e.g. Anita Sharma">
+          </div>
+          <div class="form-group">
+            <label for="guest-phone">Guest Phone (10 digits)</label>
+            <input type="text" id="guest-phone" maxlength="15" placeholder="e.g. 9876543210">
+          </div>
+          <div class="form-group">
+            <label for="guest-relation">Relation</label>
+            <select id="guest-relation">
+              <option value="Parent">Parent</option>
+              <option value="Sibling">Sibling</option>
+              <option value="Relative">Relative</option>
+              <option value="Friend">Friend</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Hint text under the form per Doc 04 Section 5.2 -->
+        <div class="hint-text">
+          ℹ️ Curfew 10 pm. Guests must leave by 8 pm.
+        </div>
+
+        <!-- Server Error message -->
+        <div id="form-error" class="error-msg"></div>
+
+        <button type="submit" class="btn btn-primary" id="submit-btn" style="margin-top: 8px;">Submit Request</button>
+      </form>
+    </div>
+
+    <!-- My Passes Section per Doc 04 Section 5.2 -->
+    <div class="card">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+        <h2 class="card-title" style="margin-bottom: 0;">My Passes</h2>
+        <button type="button" onclick="loadMyPasses()" style="background: none; border: none; color: var(--primary); font-size: 0.85rem; cursor: pointer; font-weight: 600;">Refresh</button>
+      </div>
+
+      <div id="passes-list">
+        <p style="color: var(--text-muted); font-size: 0.9rem;">Loading passes...</p>
+      </div>
+    </div>
+  </main>
+
+  <script src="app.js"></script>
+  <script>
+    // 1. Role verification
+    const currentUser = requireRole("resident");
+    if (currentUser) {
+      const userDisplay = document.getElementById("user-info");
+      userDisplay.textContent = `${currentUser.name} (${currentUser.room_no || "Room ?"})`;
+      startNotifications();
+    }
+
+    let activeType = "out";
+
+    function setPassType(type) {
+      activeType = type;
+      const outTab = document.getElementById("tab-out");
+      const guestTab = document.getElementById("tab-guest");
+      const outFields = document.getElementById("out-fields");
+      const guestFields = document.getElementById("guest-fields");
+      const errorEl = document.getElementById("form-error");
+      errorEl.textContent = "";
+
+      if (type === "out") {
+        outTab.classList.add("active");
+        guestTab.classList.remove("active");
+        outFields.style.display = "block";
+        guestFields.style.display = "none";
+        document.getElementById("out-start").required = true;
+        document.getElementById("out-end").required = true;
+        document.getElementById("guest-date").required = false;
+        document.getElementById("guest-from").required = false;
+        document.getElementById("guest-until").required = false;
+        document.getElementById("guest-name").required = false;
+        document.getElementById("guest-phone").required = false;
+      } else {
+        guestTab.classList.add("active");
+        outTab.classList.remove("active");
+        guestFields.style.display = "block";
+        outFields.style.display = "none";
+        document.getElementById("out-start").required = false;
+        document.getElementById("out-end").required = false;
+        document.getElementById("guest-date").required = true;
+        document.getElementById("guest-from").required = true;
+        document.getElementById("guest-until").required = true;
+        document.getElementById("guest-name").required = true;
+        document.getElementById("guest-phone").required = true;
+      }
+    }
+
+    // Helper: convert local date/time string into ISO 8601 string with +05:30 offset
+    // Format: YYYY-MM-DDTHH:MM:00+05:30
+    function toISTIso(dateStr, timeStr) {
+      const pad = (s) => (s.length === 5 ? s + ":00" : s);
+      return `${dateStr}T${pad(timeStr)}+05:30`;
+    }
+
+    function datetimeLocalToISTIso(dtLocalStr) {
+      // dtLocalStr is formatted as "YYYY-MM-DDTHH:MM"
+      if (!dtLocalStr) return null;
+      return dtLocalStr.length === 16 ? `${dtLocalStr}:00+05:30` : `${dtLocalStr}+05:30`;
+    }
+
+    // Form Submission
+    const passForm = document.getElementById("pass-form");
+    const formError = document.getElementById("form-error");
+    const submitBtn = document.getElementById("submit-btn");
+
+    passForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      formError.textContent = "";
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Submitting...";
+
+      let payload = { type: activeType };
+
+      if (activeType === "out") {
+        const startVal = document.getElementById("out-start").value;
+        const endVal = document.getElementById("out-end").value;
+        payload.start_at = datetimeLocalToISTIso(startVal);
+        payload.end_at = datetimeLocalToISTIso(endVal);
+        payload.destination = document.getElementById("out-destination").value.trim() || null;
+        payload.reason = document.getElementById("out-reason").value.trim() || null;
+      } else {
+        const dateVal = document.getElementById("guest-date").value;
+        const fromVal = document.getElementById("guest-from").value;
+        const untilVal = document.getElementById("guest-until").value;
+        payload.start_at = toISTIso(dateVal, fromVal);
+        payload.end_at = toISTIso(dateVal, untilVal);
+        payload.guest_name = document.getElementById("guest-name").value.trim() || null;
+        payload.guest_phone = document.getElementById("guest-phone").value.trim() || null;
+        payload.guest_relation = document.getElementById("guest-relation").value || null;
+      }
+
+      try {
+        await api("POST", "/passes", payload);
+        toast("Pass requested successfully", "success");
+        passForm.reset();
+        setPassType(activeType);
+        loadMyPasses();
+      } catch (err) {
+        // Doc 04 Section 5.2: On 400 show the server's message under the form
+        formError.textContent = err.message || "Failed to submit pass";
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Submit Request";
+      }
+    });
+
+    // Load Passes
+    async function loadMyPasses() {
+      const container = document.getElementById("passes-list");
+      try {
+        const passes = await api("GET", "/passes/mine");
+        container.innerHTML = "";
+
+        if (!passes || passes.length === 0) {
+          const empty = document.createElement("p");
+          empty.style.color = "var(--text-muted)";
+          empty.style.fontSize = "0.9rem";
+          empty.textContent = "No passes yet."; // Doc 04 Section 5.2 empty state
+          container.appendChild(empty);
+          return;
+        }
+
+        const now = new Date();
+
+        passes.forEach((p) => {
+          const card = document.createElement("div");
+          card.className = "pass-card";
+
+          // Card header
+          const header = document.createElement("div");
+          header.className = "pass-card-header";
+
+          const title = document.createElement("span");
+          title.className = "pass-type-title";
+          title.textContent = `${p.type}-pass`;
+
+          const statusBadge = badge(p.effective_status);
+          header.appendChild(title);
+          header.appendChild(statusBadge);
+          card.appendChild(header);
+
+          // Time range
+          const time = document.createElement("div");
+          time.className = "pass-time";
+          time.textContent = `${fmt(p.start_at)} → ${fmt(p.end_at)}`;
+          card.appendChild(time);
+
+          // Destination or guest details
+          const details = document.createElement("div");
+          details.className = "pass-details";
+          if (p.type === "out") {
+            const dest = p.destination ? `Destination: ${p.destination}` : "Out-pass";
+            const reason = p.reason ? ` (${p.reason})` : "";
+            details.textContent = `${dest}${reason}`;
+          } else {
+            const guest = p.guest_name ? `Guest: ${p.guest_name}` : "Guest pass";
+            const rel = p.guest_relation ? ` • ${p.guest_relation}` : "";
+            details.textContent = `${guest}${rel}`;
+          }
+          card.appendChild(details);
+
+          // Decision note if any
+          if (p.decision_note) {
+            const noteEl = document.createElement("div");
+            noteEl.className = "pass-note";
+            noteEl.textContent = `Note: ${p.decision_note}`;
+            card.appendChild(noteEl);
+          }
+
+          // Doc 04 Section 5.2: Cancel button only when status is pending or approved and end is in the future
+          const endDate = new Date(p.end_at);
+          const isCancellable =
+            (p.effective_status === "pending" || p.effective_status === "approved") &&
+            endDate > now;
+
+          if (isCancellable) {
+            const cancelBtn = document.createElement("button");
+            cancelBtn.className = "cancel-btn";
+            cancelBtn.textContent = "Cancel Pass";
+            cancelBtn.addEventListener("click", () => handleCancel(p.id));
+            card.appendChild(cancelBtn);
+          }
+
+          container.appendChild(card);
+        });
+      } catch (err) {
+        container.innerHTML = "";
+        const errText = document.createElement("p");
+        errText.style.color = "var(--red-text)";
+        errText.textContent = "Failed to load passes";
+        container.appendChild(errText);
+      }
+    }
+
+    async function handleCancel(passId) {
+      // Confirm dialog per Doc 04 Section 5.2 & Section 6
+      if (!confirm("Are you sure you want to cancel this pass? Once cancelled, it cannot be undone.")) {
+        return;
+      }
+
+      try {
+        await api("POST", `/passes/${passId}/cancel`);
+        toast("Pass cancelled", "success");
+        loadMyPasses();
+      } catch (err) {
+        toast(err.message || "Could not cancel pass", "error");
+      }
+    }
+
+    // Initial load
+    loadMyPasses();
+  </script>
+</body>
+</html>

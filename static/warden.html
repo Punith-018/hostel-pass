@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>Hostel Pass — Warden</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Header per Doc 04 Section 4 -->
+  <header class="app-header">
+    <a href="warden.html" class="brand-title">Hostel Pass</a>
+    <div class="user-nav">
+      <div id="notif-bell-container" class="notif-wrapper">
+        <button id="notif-bell-btn" class="bell-btn" title="Notifications" aria-label="Notifications">
+          🔔
+          <span id="notif-count-badge" class="badge-count" style="display: none;">0</span>
+        </button>
+        <div id="notif-dropdown" class="notif-dropdown" style="display: none;">
+          <div style="padding: 10px 12px; font-weight: 700; border-bottom: 1px solid var(--border);">Notifications</div>
+          <div id="notif-list"></div>
+        </div>
+      </div>
+      <span id="user-info" class="user-pill"></span>
+      <button class="logout-btn" onclick="logout()">Logout</button>
+    </div>
+  </header>
+
+  <main class="container" style="max-width: 680px;">
+    <!-- Three tabs: Pending | Board | History per Doc 04 Section 5.3 -->
+    <div class="tab-toggle" style="margin-top: 12px; margin-bottom: 16px;">
+      <button type="button" class="tab-toggle-btn active" id="tab-pending" onclick="switchView('pending')">Pending</button>
+      <button type="button" class="tab-toggle-btn" id="tab-board" onclick="switchView('board')">Board</button>
+      <button type="button" class="tab-toggle-btn" id="tab-history" onclick="switchView('history')">History</button>
+    </div>
+
+    <!-- 1. PENDING TAB -->
+    <section id="view-pending">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <h2 class="card-title" style="margin-bottom: 0;">Pending Approvals</h2>
+        <span id="pending-refresh-indicator" style="font-size: 0.8rem; color: var(--text-muted);">Auto-refreshes every 30s</span>
+      </div>
+      <div id="pending-list">
+        <p style="color: var(--text-muted); font-size: 0.9rem;">Loading pending passes...</p>
+      </div>
+    </section>
+
+    <!-- 2. BOARD TAB (same content as Guard screen per Doc 04 Section 5.3 & 5.4) -->
+    <section id="view-board" style="display: none;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <h2 class="card-title" style="margin-bottom: 0;">Live Gate Board</h2>
+        <span id="board-updated-at" style="font-size: 0.8rem; color: var(--text-muted);"></span>
+      </div>
+
+      <!-- Guests today section -->
+      <div class="card">
+        <h3 style="font-size: 1rem; font-weight: 700; margin-bottom: 10px;">Guests Today</h3>
+        <div id="board-guests-list"></div>
+      </div>
+
+      <!-- Declared out section -->
+      <div class="card">
+        <h3 style="font-size: 1rem; font-weight: 700; margin-bottom: 4px;">Declared Out Tonight</h3>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px;">Declared by residents, not verified at the gate.</p>
+        <div id="board-out-list"></div>
+      </div>
+    </section>
+
+    <!-- 3. HISTORY TAB -->
+    <section id="view-history" style="display: none;">
+      <div class="card">
+        <h2 class="card-title">Pass History</h2>
+        <!-- Filters per Doc 04 Section 5.3: type, status, date, resident -->
+        <div class="filter-bar">
+          <select id="hist-type" onchange="loadHistory()">
+            <option value="">All Types</option>
+            <option value="out">Out-pass</option>
+            <option value="guest">Guest pass</option>
+          </select>
+          <select id="hist-status" onchange="loadHistory()">
+            <option value="">All Statuses</option>
+            <option value="approved">Approved</option>
+            <option value="rejected">Rejected</option>
+            <option value="pending">Pending</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+          <input type="date" id="hist-date" onchange="loadHistory()" placeholder="Filter Date">
+          <input type="text" id="hist-resident" oninput="filterHistoryClientSide()" placeholder="Filter resident name / room">
+        </div>
+
+        <div class="history-table-container">
+          <div id="history-content">
+            <p style="color: var(--text-muted); font-size: 0.9rem;">Loading history...</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+  <script>
+    // 1. Role verification
+    const currentUser = requireRole("warden");
+    if (currentUser) {
+      document.getElementById("user-info").textContent = `${currentUser.name}`;
+      startNotifications();
+    }
+
+    let currentTab = "pending";
+    let pendingTimer = null;
+    let cachedHistoryData = [];
+
+    function switchView(tab) {
+      currentTab = tab;
+      document.getElementById("tab-pending").classList.toggle("active", tab === "pending");
+      document.getElementById("tab-board").classList.toggle("active", tab === "board");
+      document.getElementById("tab-history").classList.toggle("active", tab === "history");
+
+      document.getElementById("view-pending").style.display = tab === "pending" ? "block" : "none";
+      document.getElementById("view-board").style.display = tab === "board" ? "block" : "none";
+      document.getElementById("view-history").style.display = tab === "history" ? "block" : "none";
+
+      if (tab === "pending") loadPending();
+      else if (tab === "board") loadBoard();
+      else if (tab === "history") loadHistory();
+    }
+
+    // ==========================================
+    // 1. PENDING PASSES
+    // ==========================================
+    async function loadPending() {
+      const container = document.getElementById("pending-list");
+      try {
+        const passes = await api("GET", "/passes/pending");
+        container.innerHTML = "";
+
+        if (!passes || passes.length === 0) {
+          const empty = document.createElement("p");
+          empty.style.color = "var(--text-muted)";
+          empty.style.fontSize = "0.95rem";
+          empty.style.padding = "20px 0";
+          empty.textContent = "Nothing waiting. 🎉"; // Empty state from Doc 04 Section 5.3
+          container.appendChild(empty);
+          return;
+        }
+
+        const now = new Date();
+        const twoHoursLater = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+
+        passes.forEach((p) => {
+          const card = document.createElement("div");
+          card.className = "pass-card";
+
+          // Highlight cards starting within 2 hours per Doc 04 Section 5.3
+          const startDate = new Date(p.start_at);
+          const isUrgent = startDate <= twoHoursLater;
+          if (isUrgent) {
+            card.classList.add("pass-urgent");
+          }
+
+          // Header
+          const header = document.createElement("div");
+          header.className = "pass-card-header";
+
+          const titleBox = document.createElement("div");
+          const resSpan = document.createElement("strong");
+          resSpan.textContent = `${p.resident_name || "Resident"} (${p.resident_room || "Room ?"})`;
+          const typeSpan = document.createElement("span");
+          typeSpan.style.color = "var(--text-muted)";
+          typeSpan.style.marginLeft = "6px";
+          typeSpan.textContent = `• ${p.type}-pass`;
+
+          titleBox.appendChild(resSpan);
+          titleBox.appendChild(typeSpan);
+
+          if (isUrgent) {
+            const urgentTag = document.createElement("span");
+            urgentTag.className = "urgent-tag";
+            urgentTag.textContent = "Starts < 2h";
+            titleBox.appendChild(urgentTag);
+          }
+
+          const b = badge(p.effective_status);
+          header.appendChild(titleBox);
+          header.appendChild(b);
+          card.appendChild(header);
+
+          // Times
+          const time = document.createElement("div");
+          time.className = "pass-time";
+          time.textContent = `${fmt(p.start_at)} → ${fmt(p.end_at)}`;
+          card.appendChild(time);
+
+          // Details
+          const details = document.createElement("div");
+          details.className = "pass-details";
+          if (p.type === "out") {
+            const dest = p.destination ? `Destination: ${p.destination}` : "";
+            const reason = p.reason ? ` | Reason: ${p.reason}` : "";
+            details.textContent = `${dest}${reason}`;
+          } else {
+            const gName = p.guest_name ? `Guest: ${p.guest_name}` : "";
+            const gRel = p.guest_relation ? ` (${p.guest_relation})` : "";
+            const gPhone = p.guest_phone ? ` | Phone: ${p.guest_phone}` : "";
+            details.textContent = `${gName}${gRel}${gPhone}`;
+          }
+          card.appendChild(details);
+
+          // Decision input + 1-click buttons per Doc 04 Section 5.3
+          const decRow = document.createElement("div");
+          decRow.className = "decision-row";
+
+          const noteInput = document.createElement("input");
+          noteInput.type = "text";
+          noteInput.placeholder = "Optional note...";
+          noteInput.maxLength = 200;
+
+          const approveBtn = document.createElement("button");
+          approveBtn.className = "btn btn-green";
+          approveBtn.textContent = "Approve";
+          approveBtn.addEventListener("click", () => handleDecision(p.id, "approve", noteInput.value));
+
+          const rejectBtn = document.createElement("button");
+          rejectBtn.className = "btn btn-red";
+          rejectBtn.textContent = "Reject";
+          rejectBtn.addEventListener("click", () => handleDecision(p.id, "reject", noteInput.value));
+
+          decRow.appendChild(noteInput);
+          decRow.appendChild(approveBtn);
+          decRow.appendChild(rejectBtn);
+          card.appendChild(decRow);
+
+          container.appendChild(card);
+        });
+      } catch (err) {
+        container.innerHTML = "";
+        const errP = document.createElement("p");
+        errP.style.color = "var(--red-text)";
+        errP.textContent = "Failed to load pending passes";
+        container.appendChild(errP);
+      }
+    }
+
+    async function handleDecision(passId, decision, note) {
+      try {
+        await api("POST", `/passes/${passId}/decision`, {
+          decision,
+          note: note.trim() || null,
+        });
+        toast(`Pass ${decision}d successfully`, "success");
+        loadPending();
+      } catch (err) {
+        // Doc 04 Section 5.3: On 409 toast "Already decided or lapsed", refresh list
+        if (err.status === 409) {
+          toast("Already decided or lapsed", "error");
+        } else {
+          toast(err.message || "Failed to submit decision", "error");
+        }
+        loadPending();
+      }
+    }
+
+    // ==========================================
+    // 2. LIVE BOARD TAB
+    // ==========================================
+    async function loadBoard() {
+      const guestsContainer = document.getElementById("board-guests-list");
+      const outContainer = document.getElementById("board-out-list");
+      const updatedEl = document.getElementById("board-updated-at");
+
+      try {
+        const board = await api("GET", "/board");
+        const now = new Date();
+        updatedEl.textContent = `Updated ${now.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit", hour12: true })}`;
+
+        // Guests
+        guestsContainer.innerHTML = "";
+        if (!board.guests || board.guests.length === 0) {
+          const empty = document.createElement("p");
+          empty.style.color = "var(--text-muted)";
+          empty.style.fontSize = "0.85rem";
+          empty.textContent = "No guests approved today.";
+          guestsContainer.appendChild(empty);
+        } else {
+          board.guests.forEach((g) => {
+            const row = document.createElement("div");
+            row.style.padding = "10px 0";
+            row.style.borderBottom = "1px solid var(--border)";
+
+            const top = document.createElement("div");
+            top.style.display = "flex";
+            top.style.justifyContent = "space-between";
+            top.style.alignItems = "center";
+
+            const nameSpan = document.createElement("strong");
+            nameSpan.style.fontSize = "1rem";
+            nameSpan.textContent = `${g.guest_name} (${g.relation})`;
+
+            const statusLabel = document.createElement("span");
+            if (g.is_now) {
+              statusLabel.className = "badge badge-approved";
+              statusLabel.textContent = "ALLOWED NOW";
+            } else {
+              statusLabel.className = "badge badge-expired";
+              statusLabel.textContent = "Later today";
+            }
+
+            top.appendChild(nameSpan);
+            top.appendChild(statusLabel);
+            row.appendChild(top);
+
+            const hostInfo = document.createElement("div");
+            hostInfo.style.fontSize = "0.85rem";
+            hostInfo.style.color = "var(--text-muted)";
+            hostInfo.style.marginTop = "4px";
+            hostInfo.textContent = `Visiting ${g.host_name} (Room ${g.host_room || "?"}) • ${fmt(g.start_at)} → ${fmt(g.end_at)}`;
+            row.appendChild(hostInfo);
+
+            guestsContainer.appendChild(row);
+          });
+        }
+
+        // Out passes
+        outContainer.innerHTML = "";
+        if (!board.out || board.out.length === 0) {
+          const empty = document.createElement("p");
+          empty.style.color = "var(--text-muted)";
+          empty.style.fontSize = "0.85rem";
+          empty.textContent = "No one declared out.";
+          outContainer.appendChild(empty);
+        } else {
+          board.out.forEach((o) => {
+            const row = document.createElement("div");
+            row.style.padding = "8px 0";
+            row.style.borderBottom = "1px solid var(--border)";
+
+            const name = document.createElement("strong");
+            name.textContent = `${o.resident_name} (Room ${o.room || "?"})`;
+
+            const times = document.createElement("div");
+            times.style.fontSize = "0.85rem";
+            times.style.color = "var(--text-muted)";
+            times.textContent = `Out from: ${fmt(o.start_at)} • Back by: ${fmt(o.end_at)}`;
+
+            row.appendChild(name);
+            row.appendChild(times);
+            outContainer.appendChild(row);
+          });
+        }
+      } catch (err) {
+        updatedEl.textContent = "Offline — failed to update";
+      }
+    }
+
+    // ==========================================
+    // 3. HISTORY TAB
+    // ==========================================
+    async function loadHistory() {
+      const container = document.getElementById("history-content");
+      const type = document.getElementById("hist-type").value;
+      const status = document.getElementById("hist-status").value;
+      const date = document.getElementById("hist-date").value;
+
+      let queryParams = [];
+      if (type) queryParams.push(`type=${encodeURIComponent(type)}`);
+      if (status) queryParams.push(`status=${encodeURIComponent(status)}`);
+      if (date) queryParams.push(`date=${encodeURIComponent(date)}`);
+      const qs = queryParams.length ? `?${queryParams.join("&")}` : "";
+
+      try {
+        cachedHistoryData = await api("GET", `/passes${qs}`);
+        renderHistoryTable(cachedHistoryData);
+      } catch (err) {
+        container.innerHTML = "";
+        const errP = document.createElement("p");
+        errP.style.color = "var(--red-text)";
+        errP.textContent = "Failed to load history";
+        container.appendChild(errP);
+      }
+    }
+
+    function filterHistoryClientSide() {
+      const q = document.getElementById("hist-resident").value.toLowerCase().trim();
+      if (!q) {
+        renderHistoryTable(cachedHistoryData);
+        return;
+      }
+      const filtered = cachedHistoryData.filter((p) => {
+        const name = (p.resident_name || "").toLowerCase();
+        const room = (p.resident_room || "").toLowerCase();
+        return name.includes(q) || room.includes(q);
+      });
+      renderHistoryTable(filtered);
+    }
+
+    function renderHistoryTable(items) {
+      const container = document.getElementById("history-content");
+      container.innerHTML = "";
+
+      if (!items || items.length === 0) {
+        const p = document.createElement("p");
+        p.style.color = "var(--text-muted)";
+        p.style.fontSize = "0.9rem";
+        p.textContent = "No history records found matching criteria.";
+        container.appendChild(p);
+        return;
+      }
+
+      const table = document.createElement("table");
+      table.className = "history-table";
+
+      // Table Header: resident, type, times, status, decided by, decided at, note
+      const thead = document.createElement("thead");
+      const trHead = document.createElement("tr");
+      ["Resident", "Type", "Time Window", "Status", "Decided By", "Decision Time", "Note"].forEach((txt) => {
+        const th = document.createElement("th");
+        th.textContent = txt;
+        trHead.appendChild(th);
+      });
+      thead.appendChild(trHead);
+      table.appendChild(thead);
+
+      // Table Body
+      const tbody = document.createElement("tbody");
+      items.forEach((p) => {
+        const tr = document.createElement("tr");
+
+        const tdRes = document.createElement("td");
+        tdRes.textContent = `${p.resident_name || "Resident"} (${p.resident_room || "?"})`;
+
+        const tdType = document.createElement("td");
+        tdType.textContent = `${p.type}-pass`;
+
+        const tdTimes = document.createElement("td");
+        tdTimes.textContent = `${fmt(p.start_at)} → ${fmt(p.end_at)}`;
+
+        const tdStatus = document.createElement("td");
+        tdStatus.appendChild(badge(p.effective_status));
+
+        const tdBy = document.createElement("td");
+        tdBy.textContent = p.decided_by_name || "—";
+
+        const tdAt = document.createElement("td");
+        tdAt.textContent = p.decided_at ? fmt(p.decided_at) : "—";
+
+        const tdNote = document.createElement("td");
+        tdNote.textContent = p.decision_note || "—";
+
+        tr.appendChild(tdRes);
+        tr.appendChild(tdType);
+        tr.appendChild(tdTimes);
+        tr.appendChild(tdStatus);
+        tr.appendChild(tdBy);
+        tr.appendChild(tdAt);
+        tr.appendChild(tdNote);
+
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      container.appendChild(table);
+    }
+
+    // Auto-refresh pending queue every 30s per Doc 04 Section 5.3
+    loadPending();
+    pendingTimer = setInterval(() => {
+      if (currentTab === "pending") loadPending();
+      else if (currentTab === "board") loadBoard();
+    }, 30000);
+  </script>
+</body>
+</html>
